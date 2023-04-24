@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"gossip_gloomers/pkg"
+	"gloomers/pkg"
 	"log"
 )
 

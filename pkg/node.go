@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sync"
 )
 
 type INode interface {
+	NodeID() string
 	Run() error
 	Handle(string, HandlerFunc)
 	Reply(string, any) error
+	Trigger(string, any) error
 }
 
 type HandlerFunc func(msg Message) error
@@ -28,22 +31,25 @@ type node struct {
 	wg    sync.WaitGroup
 	mutex sync.Mutex
 
-	Stdin io.Reader
-	Stout io.Writer
+	Stdin  io.Reader
+	Stdout io.Writer
 }
 
 func NewNode() INode {
 	n := node{
 		handlers: make(map[string]HandlerFunc),
 		Stdin:    os.Stdin,
-		Stout:    os.Stdout,
+		Stdout:   os.Stdout,
 
 		tokens: make(chan []byte, 100),
 	}
 
 	n.Handle("init", n.handleInit)
-
 	return &n
+}
+
+func (n *node) NodeID() string {
+	return n.nodeID
 }
 
 func (n *node) init(nodeID string, nodeIDs []string) {
@@ -98,7 +104,8 @@ func (n *node) Run() error {
 
 		f, ok := n.handlers[body.Type]
 		if !ok {
-			panic("no handler for message type")
+			log.Printf("no handler for message type %s\n", body.Type)
+			continue
 		}
 
 		n.wg.Add(1)
@@ -119,7 +126,7 @@ func (n *node) Handle(key string, f HandlerFunc) {
 	n.handlers[key] = f
 }
 
-func (n *node) Reply(source string, body any) error {
+func (n *node) Reply(dest string, body any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("failed to marshal body")
@@ -127,7 +134,7 @@ func (n *node) Reply(source string, body any) error {
 
 	buf, err := json.Marshal(Message{
 		Source:      n.nodeID,
-		Destination: source,
+		Destination: dest,
 		Body:        b,
 	})
 	if err != nil {
@@ -137,12 +144,27 @@ func (n *node) Reply(source string, body any) error {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
-	if _, err = n.Stout.Write(buf); err != nil {
+	if _, err = n.Stdout.Write(buf); err != nil {
 		return fmt.Errorf("failed to send message")
 	}
 
-	_, err = n.Stout.Write([]byte("\n"))
+	_, err = n.Stdout.Write([]byte("\n"))
 	return err
+}
+
+func (n *node) Trigger(key string, body any) error {
+	if f, ok := n.handlers[key]; ok {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		msg := Message{
+			Source: n.NodeID(),
+			Body:   b,
+		}
+		return f(msg)
+	}
+	return nil
 }
 
 type Message struct {
